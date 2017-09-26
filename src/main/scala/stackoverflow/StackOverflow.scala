@@ -1,8 +1,7 @@
 package stackoverflow
 
 import org.apache.spark.rdd.RDD
-import org.apache.spark.storage.StorageLevel
-import org.apache.spark.{RangePartitioner, SparkConf, SparkContext}
+import org.apache.spark.{SparkConf, SparkContext}
 
 import scala.annotation.tailrec
 
@@ -19,7 +18,7 @@ object StackOverflow extends StackOverflow {
   /** Main function */
   def main(args: Array[String]): Unit = {
 
-    val lines = sc.textFile("src/main/resources/stackoverflow/stackoverflow.csv")
+    val lines = sc.textFile("src/main/resources/stackoverflow/stackoverflow.csv")// .sample(true,0.1,0)
     val raw = rawPostings(lines)
     val grouped = groupedPostings(raw)
     val scored = scoredPostings(grouped)
@@ -88,7 +87,7 @@ class StackOverflow extends Serializable {
     // answers.partitionBy(partitioner)
 
     val joined = questions.join(answers).groupByKey
-    println(joined.toDebugString)
+    // println(joined.toDebugString)
     joined
   }
 
@@ -202,17 +201,16 @@ class StackOverflow extends Serializable {
     // val newComputedMeans = vectors.map(v => (findClosest(v, means), List(v))).reduceByKey(_ ::: _).mapValues(averageVectors).collect()
     newComputedMeans.foreach { case (index, p) => newMeans(index) = p }
 
-    assert(newMeans.size == means.size)
-
     val distance = euclideanDistance(means, newMeans)
 
     if (debug) {
+      assert(newMeans.size == means.size)
       println(
         s"""Iteration: $iter
            |  * current distance: $distance
            |  * desired distance: $kmeansEta
            |  * means:""".stripMargin)
-      for (idx <- 0 until kmeansKernels)
+      for (idx <- 0 until means.size)
         println(f"   ${means(idx).toString}%20s ==> ${newMeans(idx).toString}%20s  " +
           f"  distance: ${euclideanDistance(means(idx), newMeans(idx))}%8.0f")
     }
@@ -300,40 +298,18 @@ class StackOverflow extends Serializable {
     val closestGrouped = closest.groupByKey()
 
     val median = closestGrouped.mapValues { vs =>
-      val groupedByLang = vs.groupBy(_._1).map { case (id, lst) => (id, lst.map(_._2)) }
+      val groupedByLang = vs.groupBy(_._1).map { case (id, lst) => (id / langSpread, lst.map(_._2)) }
       val answersCountByLang = groupedByLang.map { case (lIdx, qs) => (lIdx, qs.size) }
-      val dominantLangIdxWithSpread = answersCountByLang.toList.sortBy(_._2).last._1
-      val dominantLangIdx = dominantLangIdxWithSpread / langSpread
+      val dominantLangIdx = answersCountByLang.toList.sortBy(_._2).last._1
       val langLabel = langs(dominantLangIdx)
 
-      val dominantAnswers = groupedByLang(dominantLangIdxWithSpread).size
+      val dominantAnswers = groupedByLang(dominantLangIdx).size
       val totalAnswers = answersCountByLang.values.reduce(_ + _)
       val langPercent = dominantAnswers * 100D / totalAnswers
 
       val clusterSize = vs.size
 
-      val scores = vs.map(_._2)
-      val nbScores = scores.size
-      val sortedScores = scores.toList.sorted
-
-      // assert(sortedScores.size == nbScores)
-
-      var medianScore = -1
-
-      if (nbScores > 0) {
-        var firstIdx: Int = 0
-        var secondIdx: Int = 0
-        // pair case
-        if (nbScores % 2 == 0) {
-          firstIdx = (nbScores / 2) - 1
-          secondIdx = nbScores / 2
-          medianScore = (sortedScores(secondIdx) - sortedScores(firstIdx)) / 2
-        }
-        // odd case
-        else {
-          medianScore = (sortedScores(nbScores / 2))
-        }
-      }
+      var medianScore = medianScores(vs.map(_._2))
 
       // println("============== Cluster info ==================================")
       // println("dominantLangIdx : " + dominantLangIdx)
@@ -345,6 +321,29 @@ class StackOverflow extends Serializable {
     }
 
     median.collect().map(_._2).sortBy(_._4)
+  }
+
+  def medianScores( scores: Iterable[Int]): Int = {
+    val nbScores = scores.size
+    val sortedScores = scores.toList.sorted
+
+    var medianScore = -1
+
+    if (nbScores > 0) {
+      var firstIdx: Int = 0
+      var secondIdx: Int = 0
+      // pair case
+      if (nbScores % 2 == 0) {
+        firstIdx = (nbScores / 2) - 1
+        secondIdx = nbScores / 2
+        medianScore = (sortedScores(secondIdx) + sortedScores(firstIdx)) / 2
+      }
+      // odd case
+      else {
+        medianScore = (sortedScores(nbScores / 2))
+      }
+    }
+    medianScore
   }
 
   def printResults(results: Array[(String, Double, Int, Int)]): Unit = {
