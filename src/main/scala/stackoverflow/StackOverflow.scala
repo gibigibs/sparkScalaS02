@@ -22,7 +22,7 @@ object StackOverflow extends StackOverflow {
     val raw = rawPostings(lines)
     val grouped = groupedPostings(raw)
     val scored = scoredPostings(grouped)
-    val vectors = vectorPostings(scored).cache()
+    val vectors = vectorPostings(scored)
 
     assert(vectors.count() == 2121822, "Incorrect number of vectors: " + vectors.count())
 
@@ -136,7 +136,8 @@ class StackOverflow extends Serializable {
 
     scored.map {
       case (post, highScore) if firstLangInTag(post.tags, langs).isDefined => (firstLangInTag(post.tags, langs).get * langSpread, highScore)
-    }
+    }.cache()
+
   }
 
 
